@@ -1,0 +1,25 @@
+{
+  "timestamp": "2025-07-25T19:28:13.374Z",
+  "summary": {
+    "total": 2,
+    "passed": 1,
+    "failed": 1
+  },
+  "tests": [
+    {
+      "name": "Validação de Dependências",
+      "status": "PASSED",
+      "duration": 3,
+      "result": {
+        "mysql2": "OK",
+        "chalk": "OK",
+        "dotenv": "OK"
+      }
+    },
+    {
+      "name": "Validação de Configuração",
+      "status": "FAILED",
+      "error": "Variáveis de ambiente faltando: DB_HOST, DB_USER, DB_PASSWORD, DB_NAME"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "name": "mysql-user-migration",
+  "version": "1.0.0",
+  "description": "Script para migração de dados do usuário ID 41 para ID 358 no banco MySQL fiesto18_database",
+  "main": "migrate.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node test.js",
+    "analyze": "node analyze-database.js",
+    "migrate": "node migrate.js",
+    "remove": "node remove-user.js",
+    "dry-run": "DRY_RUN=true node migrate.js",
+    "install-setup": "./install.sh"
+  },
+  "keywords": ["mysql", "migration", "database", "user-data"],
+  "author": "Manus AI",
+  "license": "MIT",
+  "dependencies": {
+    "mysql2": "^3.6.5",
+    "dotenv": "^16.3.1",
+    "chalk": "^4.1.2"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  }
+}
+
