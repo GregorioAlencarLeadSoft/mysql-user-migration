@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
 const { testConnection } = require('./config/database');
+const { getMigrationTables } = require('./config/tables');
 const DatabaseAnalyzer = require('./analyze-database');
 const UserMigrator = require('./migrate');
 const UserRemover = require('./remove-user');
+const DatabaseExporter = require('./export-database');
 const chalk = require('chalk');
 const readline = require('readline');
 require('dotenv').config();
@@ -17,6 +19,7 @@ class MigrationCLI {
             input: process.stdin,
             output: process.stdout
         });
+        this.migrationTables = getMigrationTables();
     }
 
     /**
@@ -34,11 +37,11 @@ class MigrationCLI {
      * Exibe banner inicial
      */
     showBanner() {
-        console.log(chalk.blue.bold('\n╔══════════════════════════════════════════════════════════════╗'));
-        console.log(chalk.blue.bold('║                    MIGRAÇÃO DE USUÁRIO MYSQL                ║'));
-        console.log(chalk.blue.bold('║                                                              ║'));
-        console.log(chalk.blue.bold('║  Migra dados do usuário ID 41 para ID 358 e remove origem  ║'));
-        console.log(chalk.blue.bold('╚══════════════════════════════════════════════════════════════╝\n'));
+        console.log(chalk.blue.bold('\n  ╔══════════════════════════════════════════════════════════════╗'));
+        console.log(chalk.blue.bold('  ║                    MIGRAÇÃO DE USUÁRIO MYSQL                 ║'));
+        console.log(chalk.blue.bold('  ║                                                              ║'));
+        console.log(chalk.blue.bold('  ║  Migra dados do usuário ID 41 para ID 358 e remove origem    ║'));
+        console.log(chalk.blue.bold('  ╚══════════════════════════════════════════════════════════════╝\n'));
     }
 
     /**
@@ -50,6 +53,11 @@ class MigrationCLI {
         console.log(chalk.white(`  • Usuário origem: ${process.env.SOURCE_USER_ID || 41}`));
         console.log(chalk.white(`  • Usuário destino: ${process.env.TARGET_USER_ID || 358}`));
         console.log(chalk.white(`  • Modo DRY RUN: ${process.env.DRY_RUN === 'true' ? 'SIM' : 'NÃO'}`));
+        
+        console.log(chalk.cyan('\n🎯 TABELAS ESPECIFICADAS:'));
+        this.migrationTables.forEach(table => {
+            console.log(chalk.white(`  • ${table.table} (coluna: ${table.column})`));
+        });
         console.log('');
     }
 
@@ -62,11 +70,10 @@ class MigrationCLI {
         console.log(chalk.white('  2. Analisar estrutura do banco'));
         console.log(chalk.white('  3. Executar migração de dados'));
         console.log(chalk.white('  4. Remover usuário origem (após migração)'));
-        console.log(chalk.white('  5. Processo completo (migração + remoção)'));
-        console.log(chalk.white('  6. Sair'));
+        console.log(chalk.white('  7. Sair'));
         console.log('');
 
-        const choice = await this.askQuestion('Escolha uma opção (1-6): ');
+        const choice = await this.askQuestion('Escolha uma opção (1-7): ');
         return choice;
     }
 
@@ -156,6 +163,27 @@ class MigrationCLI {
     }
 
     /**
+     * Exporta dump do banco
+     */
+    async exportDatabase() {
+        console.log(chalk.blue('\n📦 EXPORTANDO DUMP DO BANCO DE DADOS...\n'));
+        
+        const compress = await this.askQuestion('Deseja comprimir o arquivo de dump? (s/n): ');
+        const compressed = compress === 's' || compress === 'sim';
+        
+        try {
+            const exporter = new DatabaseExporter();
+            const result = await exporter.run(compressed);
+            
+            console.log(chalk.green('\n✅ Export concluído com sucesso!\n'));
+            return result;
+        } catch (error) {
+            console.log(chalk.red(`❌ Erro no export: ${error.message}\n`));
+            throw error;
+        }
+    }
+
+    /**
      * Executa processo completo
      */
     async executeCompleteProcess() {
@@ -163,9 +191,10 @@ class MigrationCLI {
         
         console.log(chalk.yellow('Este processo irá:'));
         console.log(chalk.white('  1. Analisar o banco de dados'));
-        console.log(chalk.white('  2. Migrar todos os dados do usuário 41 para 358'));
+        console.log(chalk.white('  2. Migrar dados das tabelas especificadas do usuário 41 para 358'));
         console.log(chalk.white('  3. Verificar integridade da migração'));
         console.log(chalk.white('  4. Remover o usuário 41 permanentemente'));
+        console.log(chalk.white('  5. Exportar dump completo do banco de dados'));
         console.log('');
         
         const confirm = await this.askQuestion('Deseja prosseguir com o processo completo? (s/n): ');
@@ -176,11 +205,11 @@ class MigrationCLI {
         
         try {
             // 1. Análise
-            console.log(chalk.blue('📊 Etapa 1/4: Analisando banco de dados...'));
+            console.log(chalk.blue('📊 Etapa 1/5: Analisando banco de dados...'));
             await this.analyzeDatabaseStructure();
             
             // 2. Migração
-            console.log(chalk.blue('📦 Etapa 2/4: Executando migração...'));
+            console.log(chalk.blue('📦 Etapa 2/5: Executando migração...'));
             const migrationResult = await this.executeMigration();
             
             if (!migrationResult) {
@@ -188,22 +217,27 @@ class MigrationCLI {
             }
             
             // 3. Verificação adicional
-            console.log(chalk.blue('🔍 Etapa 3/4: Verificação adicional...'));
+            console.log(chalk.blue('🔍 Etapa 3/5: Verificação adicional...'));
             await new Promise(resolve => setTimeout(resolve, 2000)); // Pausa para review
             
             // 4. Remoção
-            console.log(chalk.blue('🗑️  Etapa 4/4: Removendo usuário origem...'));
+            console.log(chalk.blue('🗑️  Etapa 4/5: Removendo usuário origem...'));
             const removalResult = await this.removeSourceUser();
             
             if (!removalResult) {
                 throw new Error('Remoção foi cancelada');
             }
             
+            // 5. Export
+            console.log(chalk.blue('📦 Etapa 5/5: Exportando dump do banco...'));
+            const exportResult = await this.exportDatabase();
+            
             console.log(chalk.green.bold('\n🎉 PROCESSO COMPLETO FINALIZADO COM SUCESSO!\n'));
             
             return {
                 migration: migrationResult,
-                removal: removalResult
+                removal: removalResult,
+                export: exportResult
             };
             
         } catch (error) {
@@ -237,9 +271,12 @@ class MigrationCLI {
                         await this.removeSourceUser();
                         break;
                     case '5':
-                        await this.executeCompleteProcess();
+                        await this.exportDatabase();
                         break;
                     case '6':
+                        await this.executeCompleteProcess();
+                        break;
+                    case '7':
                         console.log(chalk.blue('👋 Saindo... Até logo!\n'));
                         this.rl.close();
                         return;
@@ -269,4 +306,3 @@ if (require.main === module) {
 }
 
 module.exports = MigrationCLI;
-

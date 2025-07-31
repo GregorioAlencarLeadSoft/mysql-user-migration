@@ -18,7 +18,7 @@ const dbConfig = {
     reconnect: true
 };
 
-/**
+/** 
  * Cria um pool de conexões MySQL
  */
 const createPool = () => {

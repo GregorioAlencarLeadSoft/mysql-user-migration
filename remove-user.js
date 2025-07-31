@@ -1,5 +1,5 @@
 const { createPool } = require('./config/database');
-const DatabaseAnalyzer = require('./analyze-database');
+const { getMigrationTables } = require('./config/tables');
 const chalk = require('chalk');
 const fs = require('fs');
 require('dotenv').config();
@@ -13,6 +13,7 @@ class UserRemover {
         this.sourceUserId = parseInt(process.env.SOURCE_USER_ID) || 41;
         this.dryRun = process.env.DRY_RUN === 'true';
         this.removalLog = [];
+        this.migrationTables = getMigrationTables();
     }
 
     /**
@@ -48,6 +49,7 @@ class UserRemover {
         fs.writeFileSync(logFile, JSON.stringify({
             sourceUserId: this.sourceUserId,
             dryRun: this.dryRun,
+            migrationTables: this.migrationTables,
             timestamp: new Date().toISOString(),
             log: this.removalLog
         }, null, 2));
@@ -62,36 +64,40 @@ class UserRemover {
         try {
             this.log('info', 'Verificando se é seguro remover o usuário...');
             
-            const analyzer = new DatabaseAnalyzer();
-            const tableMap = await analyzer.findTablesWithUserId();
             const safetyCheck = {};
             let totalReferences = 0;
             
-            // Verificar cada tabela para referências restantes
-            for (const [tableName, columns] of Object.entries(tableMap)) {
-                const userIdColumn = columns.find(col => 
-                    col.column === 'user_id' || 
-                    col.column === 'usuario_id' ||
-                    col.column.endsWith('_user_id')
-                );
+            // Verificar cada tabela especificada para referências restantes
+            for (const tableConfig of this.migrationTables) {
+                const tableName = tableConfig.table;
+                const userIdColumn = tableConfig.column;
                 
-                if (userIdColumn) {
+                try {
                     const [countResult] = await this.pool.execute(
-                        `SELECT COUNT(*) as count FROM ${tableName} WHERE ${userIdColumn.column} = ?`,
+                        `SELECT COUNT(*) as count FROM \`${tableName}\` WHERE \`${userIdColumn}\` = ?`,
                         [this.sourceUserId]
                     );
                     
                     const count = countResult[0].count;
                     safetyCheck[tableName] = {
-                        column: userIdColumn.column,
+                        column: userIdColumn,
                         remainingReferences: count
                     };
                     
                     totalReferences += count;
                     
                     if (count > 0) {
-                        this.log('warning', `Tabela ${tableName}: ${count} referências restantes na coluna ${userIdColumn.column}`);
+                        this.log('warning', `Tabela ${tableName}: ${count} referências restantes na coluna ${userIdColumn}`);
+                    } else {
+                        this.log('info', `Tabela ${tableName}: Nenhuma referência restante`);
                     }
+                } catch (error) {
+                    this.log('error', `Erro ao verificar tabela ${tableName}`, error.message);
+                    safetyCheck[tableName] = {
+                        column: userIdColumn,
+                        remainingReferences: -1,
+                        error: error.message
+                    };
                 }
             }
             
@@ -116,50 +122,6 @@ class UserRemover {
     }
 
     /**
-     * Encontra e analisa chaves estrangeiras que referenciam o usuário
-     */
-    async analyzeForeignKeys() {
-        try {
-            this.log('info', 'Analisando chaves estrangeiras...');
-            
-            const [foreignKeys] = await this.pool.execute(`
-                SELECT 
-                    TABLE_NAME,
-                    COLUMN_NAME,
-                    CONSTRAINT_NAME,
-                    REFERENCED_TABLE_NAME,
-                    REFERENCED_COLUMN_NAME
-                FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE 
-                WHERE REFERENCED_TABLE_SCHEMA = ?
-                AND REFERENCED_TABLE_NAME IS NOT NULL
-                AND (COLUMN_NAME LIKE '%user_id%' OR REFERENCED_COLUMN_NAME LIKE '%user_id%')
-                ORDER BY TABLE_NAME
-            `, [process.env.DB_NAME]);
-            
-            this.log('info', `Encontradas ${foreignKeys.length} chaves estrangeiras relacionadas a user_id`);
-            
-            const fkAnalysis = {};
-            for (const fk of foreignKeys) {
-                if (!fkAnalysis[fk.TABLE_NAME]) {
-                    fkAnalysis[fk.TABLE_NAME] = [];
-                }
-                fkAnalysis[fk.TABLE_NAME].push({
-                    column: fk.COLUMN_NAME,
-                    constraint: fk.CONSTRAINT_NAME,
-                    referencedTable: fk.REFERENCED_TABLE_NAME,
-                    referencedColumn: fk.REFERENCED_COLUMN_NAME
-                });
-            }
-            
-            return fkAnalysis;
-            
-        } catch (error) {
-            this.log('error', 'Erro na análise de chaves estrangeiras', error.message);
-            throw error;
-        }
-    }
-
-    /**
      * Cria backup do usuário antes da remoção
      */
     async createUserBackup() {
@@ -168,7 +130,7 @@ class UserRemover {
             
             // Buscar dados do usuário na tabela principal
             const [userData] = await this.pool.execute(
-                'SELECT * FROM users WHERE id = ?',
+                'SELECT * FROM user WHERE id = ?',
                 [this.sourceUserId]
             );
             
@@ -181,7 +143,8 @@ class UserRemover {
                 timestamp: new Date().toISOString(),
                 userId: this.sourceUserId,
                 userData: user,
-                backupReason: 'Pre-deletion backup'
+                backupReason: 'Pre-deletion backup',
+                migrationTables: this.migrationTables
             };
             
             const backupFile = `user-backup-${this.sourceUserId}-${Date.now()}.json`;
@@ -205,7 +168,7 @@ class UserRemover {
      */
     async removeUserRecord() {
         try {
-            this.log('info', `Removendo usuário ${this.sourceUserId} da tabela users...`);
+            this.log('info', `Removendo usuário ${this.sourceUserId} da tabela user...`);
             
             if (this.dryRun) {
                 this.log('warning', 'DRY RUN: Simulando remoção do usuário');
@@ -213,7 +176,7 @@ class UserRemover {
             }
             
             const [deleteResult] = await this.pool.execute(
-                'DELETE FROM users WHERE id = ?',
+                'DELETE FROM user WHERE id = ?',
                 [this.sourceUserId]
             );
             
@@ -242,14 +205,14 @@ class UserRemover {
             this.log('info', 'Verificando se a remoção foi bem-sucedida...');
             
             const [userCheck] = await this.pool.execute(
-                'SELECT COUNT(*) as count FROM users WHERE id = ?',
+                'SELECT COUNT(*) as count FROM user WHERE id = ?',
                 [this.sourceUserId]
             );
             
             const userExists = userCheck[0].count > 0;
             
             if (userExists) {
-                this.log('error', `Usuário ${this.sourceUserId} ainda existe na tabela users`);
+                this.log('error', `Usuário ${this.sourceUserId} ainda existe na tabela user`);
                 return { success: false, userStillExists: true };
             } else {
                 this.log('success', `Confirmado: Usuário ${this.sourceUserId} foi removido com sucesso`);
@@ -276,9 +239,6 @@ class UserRemover {
             if (!safetyResult.isSafe) {
                 throw new Error(`Não é seguro remover o usuário. ${safetyResult.totalReferences} referências restantes encontradas.`);
             }
-            
-            // Analisar chaves estrangeiras
-            const fkAnalysis = await this.analyzeForeignKeys();
             
             // Criar backup
             const backupFile = await this.createUserBackup();
@@ -313,7 +273,6 @@ class UserRemover {
             
             return {
                 safety: safetyResult,
-                foreignKeys: fkAnalysis,
                 backup: backupFile,
                 removal: removalResult,
                 verification: verificationResult,
@@ -356,4 +315,3 @@ if (require.main === module) {
 }
 
 module.exports = UserRemover;
-
